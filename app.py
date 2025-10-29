@@ -83,8 +83,9 @@ def apply_mapping(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
     return df.rename(columns=mapping)
 
 
-def slugify(value: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+def slugify(value: object) -> str:
+    text = value if isinstance(value, str) else f"{value}"
+    value = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return value or "audience"
 
 

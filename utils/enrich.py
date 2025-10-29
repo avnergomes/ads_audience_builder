@@ -194,7 +194,9 @@ def infer_gender(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     dictionary = {
-        key.lower(): value for key, value in load_gender_dictionary().items()
+        (key if isinstance(key, str) else f"{key}").lower(): value
+        for key, value in load_gender_dictionary().items()
+        if key is not None
     }
 
     df = df.copy()
@@ -206,7 +208,7 @@ def infer_gender(df: pd.DataFrame) -> pd.DataFrame:
         gender = dictionary.get(name.lower()) if dictionary else None
         confidence: Optional[float] = None
 
-        if not gender or gender.lower() == "unknown":
+        if not isinstance(gender, str) or gender.lower() == "unknown":
             data = _query_gender_api(name)
             if data:
                 gender = data.get("gender") or gender

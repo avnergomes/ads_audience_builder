@@ -43,17 +43,30 @@ STANDARD_COLUMNS: Dict[str, str] = {
 def normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of *df* with lower-cased, canonicalised headers."""
 
+    def _stringify(value: object) -> str:
+        if value is None:
+            return ""
+        # Using f-strings ensures we always end up with a Python ``str`` even
+        # when the original value is a numpy scalar or another exotic type.
+        text = value if isinstance(value, str) else f"{value}"
+        return text
+
     renamed = {}
     for column in df.columns:
-        normalised = str(column).lower().strip() if column is not None else ""
-        renamed[column] = STANDARD_COLUMNS.get(normalised, normalised)
+        text = _stringify(column).strip().lower()
+        renamed[column] = STANDARD_COLUMNS.get(text, text)
     return df.rename(columns=renamed)
 
 
 def trim_strings(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
+    def _trim(value: object) -> str:
+        if pd.isna(value):
+            return ""
+        return (value if isinstance(value, str) else f"{value}").strip()
+
     for column in columns:
         if column in df.columns:
-            df[column] = df[column].astype(str).str.strip()
+            df[column] = df[column].apply(_trim)
     return df
 
 
@@ -69,7 +82,13 @@ def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
 
     removed = 0
     if "email" in df.columns:
-        df["email"] = df["email"].astype(str).str.lower().str.strip()
+        def _normalise_email(value: object) -> str:
+            if pd.isna(value):
+                return ""
+            text = value if isinstance(value, str) else f"{value}"
+            return text.strip().lower()
+
+        df["email"] = df["email"].apply(_normalise_email)
         mask = df["email"].apply(validate_email)
         removed = int((~mask).sum())
         df = df[mask]
