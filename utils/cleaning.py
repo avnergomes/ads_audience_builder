@@ -6,6 +6,7 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
+import phonenumbers
 from pandas.api.types import is_scalar
 
 
@@ -100,6 +101,77 @@ def validate_email(email: object) -> bool:
     return bool(re.match(r"[^@]+@[^@]+\.[^@]+", text.lower()))
 
 
+def validate_phone(phone: object, default_country: str = "US") -> bool:
+    """Validate and check if a phone number is parseable.
+    
+    Args:
+        phone: The phone number to validate
+        default_country: Default country code for parsing (default: US)
+    
+    Returns:
+        True if the phone number is valid, False otherwise
+    """
+    if phone is None or not is_scalar(phone):
+        return False
+
+    if pd.isna(phone):
+        return False
+
+    text = str(phone).strip()
+    if not text:
+        return False
+
+    try:
+        parsed = phonenumbers.parse(text, default_country)
+        return phonenumbers.is_valid_number(parsed)
+    except phonenumbers.NumberParseException:
+        return False
+
+
+def normalize_phone(phone: object, default_country: str = "US") -> str:
+    """Normalize a phone number to E164 format.
+    
+    Args:
+        phone: The phone number to normalize
+        default_country: Default country code for parsing (default: US)
+    
+    Returns:
+        Normalized phone number in E164 format or empty string if invalid
+    """
+    if phone is None or not is_scalar(phone):
+        return ""
+
+    if pd.isna(phone):
+        return ""
+
+    text = str(phone).strip()
+    if not text:
+        return ""
+
+    try:
+        parsed = phonenumbers.parse(text, default_country)
+        if phonenumbers.is_valid_number(parsed):
+            return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+    except phonenumbers.NumberParseException:
+        pass
+
+    return text
+
+
+def clean_phones(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """Normalize phone numbers to E164 format.
+    
+    Returns the cleaned DataFrame along with the number of invalid phones found.
+    Note: Unlike emails, invalid phones are not removed, just flagged in stats.
+    """
+    invalid_phones = 0
+    if "phone" in df.columns:
+        df["phone"] = df["phone"].apply(normalize_phone)
+        invalid_mask = df["phone"].apply(lambda x: x == "" or not validate_phone(x))
+        invalid_phones = int(invalid_mask.sum())
+    return df, invalid_phones
+
+
 def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     """Normalise e-mails and drop invalid rows.
 
@@ -160,6 +232,9 @@ def clean_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int], Lis
 
     df, invalid_emails = clean_emails(df)
     stats["invalid_emails"] = invalid_emails
+
+    df, invalid_phones = clean_phones(df)
+    stats["invalid_phones"] = invalid_phones
 
     df, duplicates_removed = deduplicate(df, ["email", "phone"])
     stats["duplicates_removed"] = duplicates_removed

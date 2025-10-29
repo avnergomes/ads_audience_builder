@@ -106,10 +106,11 @@ if uploaded_file:
     cleaned_df, stats, summary = cleaning.clean_dataframe(mapped_df)
 
     st.subheader("🧼 Cleaning Summary")
-    cols = st.columns(3)
+    cols = st.columns(4)
     cols[0].metric("Rows imported", stats["initial_rows"])
     cols[1].metric("Invalid emails removed", stats["invalid_emails"])
-    cols[2].metric("Duplicates removed", stats["duplicates_removed"])
+    cols[2].metric("Invalid phones found", stats.get("invalid_phones", 0))
+    cols[3].metric("Duplicates removed", stats["duplicates_removed"])
     st.metric("Rows after cleaning", stats["final_rows"])
 
     if summary:

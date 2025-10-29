@@ -12,13 +12,16 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 import requests
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 ROOT = Path(__file__).resolve().parents[1]
 GENDER_API_ENDPOINT = "https://gender-api.com/get"
-GENDER_API_KEY = os.getenv(
-    "GENDER_API_KEY",
-    "23f1759173b056d4c4ce5bb29f3366d01665ff2789c6f003110ce6a6e4173237",
-)
+# Remove hardcoded API key - users must provide their own via environment variable
+GENDER_API_KEY = os.getenv("GENDER_API_KEY")
 
 LOGGER = logging.getLogger(__name__)
 
