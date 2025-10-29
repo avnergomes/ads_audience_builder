@@ -4,5 +4,4 @@ numpy
 phonenumbers
 email-validator
 openpyxl
-hashlib
 requests
