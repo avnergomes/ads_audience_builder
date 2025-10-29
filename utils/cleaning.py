@@ -6,6 +6,7 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
+from pandas.api.types import is_scalar
 
 
 # Canonical column names we support throughout the application. Whenever we
@@ -46,10 +47,16 @@ def normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     def _stringify(value: object) -> str:
         if value is None:
             return ""
-        # Using f-strings ensures we always end up with a Python ``str`` even
-        # when the original value is a numpy scalar or another exotic type.
-        text = value if isinstance(value, str) else f"{value}"
-        return text
+
+        if is_scalar(value):
+            # Using f-strings ensures we always end up with a Python ``str`` even
+            # when the original value is a numpy scalar or another exotic type.
+            text = value if isinstance(value, str) else f"{value}"
+            return text
+
+        # Fallback for lists/Series/etc. – treat them as empty so they do not
+        # break normalisation.
+        return ""
 
     renamed = {}
     for column in df.columns:
@@ -60,9 +67,18 @@ def normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def trim_strings(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
     def _trim(value: object) -> str:
-        if pd.isna(value):
+        if value is None:
             return ""
-        return (value if isinstance(value, str) else f"{value}").strip()
+
+        if is_scalar(value):
+            if pd.isna(value):
+                return ""
+            return (value if isinstance(value, str) else f"{value}").strip()
+
+        # Non scalar objects (lists, Series, dicts, etc.) are not meaningful
+        # audience attributes; normalise them to empty strings so downstream
+        # steps can safely treat them as missing.
+        return ""
 
     for column in columns:
         if column in df.columns:
@@ -70,8 +86,18 @@ def trim_strings(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
     return df
 
 
-def validate_email(email: str) -> bool:
-    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", str(email)))
+def validate_email(email: object) -> bool:
+    if email is None or not is_scalar(email):
+        return False
+
+    if pd.isna(email):
+        return False
+
+    text = str(email).strip()
+    if not text:
+        return False
+
+    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", text.lower()))
 
 
 def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
@@ -83,8 +109,11 @@ def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     removed = 0
     if "email" in df.columns:
         def _normalise_email(value: object) -> str:
+            if value is None or not is_scalar(value):
+                return ""
             if pd.isna(value):
                 return ""
+
             text = value if isinstance(value, str) else f"{value}"
             return text.strip().lower()
 
