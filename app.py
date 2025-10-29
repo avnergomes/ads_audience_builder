@@ -23,6 +23,14 @@ def load_uploaded_file(file) -> pd.DataFrame:
     return pd.read_csv(file)
 
 
+def _normalise_header(value: object) -> str:
+    """Return a lower-cased string representation for fuzzy header matching."""
+
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
 EXPECTED_FIELDS: Dict[str, List[str]] = {
     "email": ["email", "e-mail", "mail"],
     "phone": ["phone", "phone number", "mobile"],
@@ -53,8 +61,9 @@ def field_mapping_ui(df: pd.DataFrame) -> Dict[str, str]:
             with row_columns[idx]:
                 hints = EXPECTED_FIELDS[field]
                 default_option = "Not mapped"
+                normalised_hints = {_normalise_header(hint) for hint in hints}
                 for column in columns:
-                    if column.lower() in [hint.lower() for hint in hints]:
+                    if _normalise_header(column) in normalised_hints:
                         default_option = column
                         break
                 selection = st.selectbox(

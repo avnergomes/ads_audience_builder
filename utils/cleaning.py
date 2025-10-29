@@ -43,10 +43,10 @@ STANDARD_COLUMNS: Dict[str, str] = {
 def normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of *df* with lower-cased, canonicalised headers."""
 
-    renamed = {
-        column: STANDARD_COLUMNS.get(column.lower().strip(), column.lower().strip())
-        for column in df.columns
-    }
+    renamed = {}
+    for column in df.columns:
+        normalised = str(column).lower().strip() if column is not None else ""
+        renamed[column] = STANDARD_COLUMNS.get(normalised, normalised)
     return df.rename(columns=renamed)
 
 
