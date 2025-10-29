@@ -28,6 +28,7 @@ EXPECTED_FIELDS: Dict[str, List[str]] = {
     "phone": ["phone", "phone number", "mobile"],
     "fn": ["first name", "fn"],
     "ln": ["last name", "ln"],
+    "full_name": ["name", "full name", "fullname"],
     "ct": ["city", "ct"],
     "st": ["state", "region", "st"],
     "zip": ["zip", "postal", "zip code"],
