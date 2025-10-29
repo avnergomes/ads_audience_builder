@@ -101,6 +101,28 @@ def _extract_name_parts(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
     return first, last
 
 
+def _is_missing_string(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, dict, set, pd.Series, pd.DataFrame)):
+        return True
+    try:
+        result = pd.isna(value)
+    except Exception:
+        return True
+
+    try:
+        return bool(result)
+    except Exception:
+        return True
+
+
+def _string_series_missing_mask(series: pd.Series) -> pd.Series:
+    return series.apply(_is_missing_string)
+
+
 def _fill_names_from_gender_api(df: pd.DataFrame) -> pd.DataFrame:
     needs_columns = {"fn", "ln", "full_name"}
     if not any(column in df.columns for column in needs_columns):
@@ -112,8 +134,8 @@ def _fill_names_from_gender_api(df: pd.DataFrame) -> pd.DataFrame:
     if "ln" not in df.columns:
         df["ln"] = pd.NA
 
-    fn_missing = df["fn"].isna() | (df["fn"].astype(str).str.strip() == "")
-    ln_missing = df["ln"].isna() | (df["ln"].astype(str).str.strip() == "")
+    fn_missing = _string_series_missing_mask(df["fn"])
+    ln_missing = _string_series_missing_mask(df["ln"])
     needs_lookup = fn_missing | ln_missing
 
     if not needs_lookup.any():
@@ -166,8 +188,8 @@ def autofill_names(df: pd.DataFrame) -> pd.DataFrame:
         derived = df["email"].apply(derive_name_from_email)
         derived_df = pd.DataFrame(derived.tolist(), columns=["fn_email", "ln_email"], index=df.index)
 
-        fn_missing = df["fn"].isna() | (df["fn"].astype(str).str.strip() == "")
-        ln_missing = df["ln"].isna() | (df["ln"].astype(str).str.strip() == "")
+        fn_missing = _string_series_missing_mask(df["fn"])
+        ln_missing = _string_series_missing_mask(df["ln"])
 
         if "fn_email" in derived_df:
             df.loc[fn_missing, "fn"] = derived_df.loc[fn_missing, "fn_email"].apply(
@@ -224,14 +246,12 @@ def infer_gender(df: pd.DataFrame) -> pd.DataFrame:
                     mask = names == name
                     if first and "fn" in df.columns:
                         df.loc[
-                            mask
-                            & (df["fn"].isna() | (df["fn"].astype(str).str.strip() == "")),
+                            mask & _string_series_missing_mask(df["fn"]),
                             "fn",
                         ] = first
                     if last and "ln" in df.columns:
                         df.loc[
-                            mask
-                            & (df["ln"].isna() | (df["ln"].astype(str).str.strip() == "")),
+                            mask & _string_series_missing_mask(df["ln"]),
                             "ln",
                         ] = last
 
