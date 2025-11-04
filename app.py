@@ -8,7 +8,7 @@ from typing import Dict, List
 import pandas as pd
 import streamlit as st
 
-from utils import cleaning, enrich, export_google, export_meta, export_tiktok, segmentation
+from utils import cleaning, enrich, export_google, export_meta, export_tiktok, segmentation, ingest
 
 
 st.set_page_config(page_title="Smart Custom Audience Builder", layout="wide")
@@ -18,9 +18,17 @@ st.write("Upload, clean, enrich, segment, and export your audience lists for Met
 
 
 def load_uploaded_file(file) -> pd.DataFrame:
-    if file.name.endswith(".xlsx"):
+    """Load an uploaded file into a DataFrame with robust CSV handling."""
+
+    filename = getattr(file, "name", "") or ""
+    suffix = filename.lower()
+
+    if suffix.endswith(".xlsx"):
+        if hasattr(file, "seek"):
+            file.seek(0)
         return pd.read_excel(file)
-    return pd.read_csv(file)
+
+    return ingest.read_audience_csv(file)
 
 
 def _normalise_header(value: object) -> str:
@@ -106,11 +114,18 @@ if uploaded_file:
     cleaned_df, stats, summary = cleaning.clean_dataframe(mapped_df)
 
     st.subheader("🧼 Cleaning Summary")
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric("Rows imported", stats["initial_rows"])
     cols[1].metric("Invalid emails removed", stats["invalid_emails"])
-    cols[2].metric("Invalid phones found", stats.get("invalid_phones", 0))
-    cols[3].metric("Duplicates removed", stats["duplicates_removed"])
+    cols[2].metric("Email corrections applied", stats.get("email_corrections", 0))
+    cols[3].metric("Missing emails", stats.get("missing_emails", 0))
+    cols[4].metric("Invalid phones found", stats.get("invalid_phones", 0))
+
+    cols = st.columns(3)
+    cols[0].metric("Email parsing issues fixed", stats.get("email_parsing_errors", 0))
+    cols[1].metric("Duplicates removed", stats["duplicates_removed"])
+    cols[2].metric("Rows without contact removed", stats.get("rows_without_contact", 0))
+
     st.metric("Rows after cleaning", stats["final_rows"])
 
     if summary:

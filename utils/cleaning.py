@@ -1,5 +1,4 @@
 """Utilities for normalising and cleaning uploaded audience data."""
-
 from __future__ import annotations
 
 import re
@@ -8,6 +7,22 @@ from typing import Dict, Iterable, List, Tuple
 import pandas as pd
 import phonenumbers
 from pandas.api.types import is_scalar
+
+
+# Common e-mail validation helpers.
+EMAIL_CANDIDATE_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+", re.IGNORECASE)
+EMAIL_VALID_RE = re.compile(
+    r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
+    re.IGNORECASE,
+)
+
+# Top level domain typos we can confidently auto-correct.
+EMAIL_TLD_FIXES = {
+    "con": "com",
+    "c0m": "com",
+    "cpm": "com",
+    "cim": "com",
+}
 
 
 # Canonical column names we support throughout the application. Whenever we
@@ -98,7 +113,95 @@ def validate_email(email: object) -> bool:
     if not text:
         return False
 
-    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", text.lower()))
+    return bool(EMAIL_VALID_RE.match(text))
+
+
+def _sanitise_email(value: object) -> Tuple[str, Dict[str, bool]]:
+    """Return a cleaned-up e-mail string and metadata about the transformation."""
+
+    meta = {"missing": False, "corrected": False, "parse_error": False}
+
+    if value is None or not is_scalar(value):
+        meta["missing"] = True
+        return "", meta
+
+    if pd.isna(value):
+        meta["missing"] = True
+        return "", meta
+
+    text = value if isinstance(value, str) else f"{value}"
+    text = text.strip()
+    if not text:
+        meta["missing"] = True
+        return "", meta
+
+    # Remove zero width characters or BOM markers that frequently sneak into
+    # CRM exports.
+    cleaned = text.replace("\ufeff", "").replace("\u200b", "")
+    if cleaned != text:
+        meta["corrected"] = True
+        text = cleaned
+
+    # Trim surrounding punctuation such as quotes or brackets.
+    stripped = text.strip("\"'<>[]{}()")
+    if stripped != text:
+        meta["corrected"] = True
+        text = stripped
+
+    text = text.lower()
+
+    if text in {"none", "nan", "null"}:
+        meta["missing"] = True
+        return "", meta
+
+    if text.startswith("mailto:"):
+        text = text[len("mailto:") :]
+        meta["corrected"] = True
+
+    if re.search(r"\s", text):
+        text = re.sub(r"\s+", "", text)
+        meta["corrected"] = True
+
+    match = EMAIL_CANDIDATE_RE.search(text)
+    if match:
+        candidate = match.group(0).lower()
+        if match.start() != 0 or match.end() != len(text):
+            meta["parse_error"] = True
+            meta["corrected"] = True
+        text = candidate
+
+    trimmed = text.rstrip(",;:.)]")
+    if trimmed != text:
+        meta["parse_error"] = True
+        meta["corrected"] = True
+        text = trimmed
+
+    if ".." in text:
+        text = re.sub(r"\.\.+", ".", text)
+        meta["corrected"] = True
+
+    if text.endswith("@gmail"):
+        text = f"{text}.com"
+        meta["corrected"] = True
+    else:
+        for wrong, right in EMAIL_TLD_FIXES.items():
+            suffix = f".{wrong}"
+            if text.endswith(suffix):
+                text = f"{text[: -len(wrong)]}{right}"
+                meta["corrected"] = True
+                break
+
+    if text.endswith("@hotmail.co") or text.endswith("@outlook.co"):
+        text = f"{text}m"
+        meta["corrected"] = True
+
+    if text.count("@") != 1:
+        return text, meta
+
+    if not text:
+        meta["missing"] = True
+
+    return text, meta
 
 
 def validate_phone(phone: object, default_country: str = "US") -> bool:
@@ -172,28 +275,65 @@ def clean_phones(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return df, invalid_phones
 
 
-def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    """Normalise e-mails and drop invalid rows.
+def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """Normalise e-mail values and auto-correct common issues."""
 
-    Returns the cleaned DataFrame along with the number of records removed.
-    """
+    stats = {"invalid": 0, "missing": 0, "corrected": 0, "parsing_errors": 0}
 
-    removed = 0
+    if "email" not in df.columns:
+        return df, stats
+
+    cleaned_emails: List[str] = []
+    valid_mask: List[bool] = []
+
+    for value in df["email"]:
+        email, meta = _sanitise_email(value)
+        cleaned_emails.append(email)
+
+        if meta["missing"] and not email:
+            stats["missing"] += 1
+            valid_mask.append(True)
+            continue
+
+        if meta["parse_error"]:
+            stats["parsing_errors"] += 1
+
+        if meta["corrected"]:
+            stats["corrected"] += 1
+
+        is_valid = bool(EMAIL_VALID_RE.match(email))
+        if not is_valid:
+            stats["invalid"] += 1
+        valid_mask.append(is_valid)
+
+    df["email"] = cleaned_emails
+    df = df[valid_mask]
+
+    return df, stats
+
+
+def drop_unreachable_contacts(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """Remove rows where both the e-mail and phone fields are empty."""
+
+    if df.empty:
+        return df, 0
+
     if "email" in df.columns:
-        def _normalise_email(value: object) -> str:
-            if value is None or not is_scalar(value):
-                return ""
-            if pd.isna(value):
-                return ""
+        email_empty = df["email"].fillna("").astype(str).str.strip().eq("")
+    else:
+        email_empty = pd.Series(True, index=df.index)
 
-            text = value if isinstance(value, str) else f"{value}"
-            return text.strip().lower()
+    if "phone" in df.columns:
+        phone_empty = df["phone"].fillna("").astype(str).str.strip().eq("")
+    else:
+        phone_empty = pd.Series(True, index=df.index)
 
-        df["email"] = df["email"].apply(_normalise_email)
-        mask = df["email"].apply(validate_email)
-        removed = int((~mask).sum())
-        df = df[mask]
-    return df, removed
+    unreachable_mask = email_empty & phone_empty
+    removed = int(unreachable_mask.sum())
+    if not removed:
+        return df, 0
+
+    return df[~unreachable_mask], removed
 
 
 def deduplicate(df: pd.DataFrame, subset: Iterable[str]) -> Tuple[pd.DataFrame, int]:
@@ -214,11 +354,16 @@ def column_summary(df: pd.DataFrame, columns: Iterable[str]) -> List[Dict[str, i
     summary = []
     for column in columns:
         if column in df.columns:
-            summary.append({
-                "column": column,
-                "missing": int(df[column].isna().sum()),
-                "populated": int(df[column].notna().sum()),
-            })
+            series = df[column]
+            if series.dtype == object:
+                values = series.fillna("").astype(str).str.strip()
+                missing_mask = values.eq("")
+            else:
+                missing_mask = series.isna()
+
+            missing = int(missing_mask.sum())
+            populated = len(series) - missing
+            summary.append({"column": column, "missing": missing, "populated": populated})
     return summary
 
 
@@ -230,11 +375,17 @@ def clean_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int], Lis
     df = normalise_columns(df)
     df = trim_strings(df, df.select_dtypes(include="object").columns)
 
-    df, invalid_emails = clean_emails(df)
-    stats["invalid_emails"] = invalid_emails
+    df, email_stats = clean_emails(df)
+    stats["invalid_emails"] = email_stats["invalid"]
+    stats["missing_emails"] = email_stats["missing"]
+    stats["email_corrections"] = email_stats["corrected"]
+    stats["email_parsing_errors"] = email_stats["parsing_errors"]
 
     df, invalid_phones = clean_phones(df)
     stats["invalid_phones"] = invalid_phones
+
+    df, unreachable_removed = drop_unreachable_contacts(df)
+    stats["rows_without_contact"] = unreachable_removed
 
     df, duplicates_removed = deduplicate(df, ["email", "phone"])
     stats["duplicates_removed"] = duplicates_removed

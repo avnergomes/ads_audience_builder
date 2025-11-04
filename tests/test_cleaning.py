@@ -1,8 +1,10 @@
 import unittest
 
+from io import StringIO
+
 import pandas as pd
 
-from utils import cleaning
+from utils import cleaning, ingest
 
 
 class CleaningNormalisationTests(unittest.TestCase):
@@ -24,6 +26,8 @@ class CleaningNormalisationTests(unittest.TestCase):
         # Only the valid e-mail row should survive cleaning.
         self.assertEqual(stats["initial_rows"], 2)
         self.assertEqual(stats["invalid_emails"], 1)
+        self.assertEqual(stats["missing_emails"], 0)
+        self.assertEqual(stats["rows_without_contact"], 0)
         self.assertEqual(stats["final_rows"], 1)
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(cleaned.iloc[0]["email"], "valid@example.com")
@@ -45,7 +49,9 @@ class CleaningNormalisationTests(unittest.TestCase):
 
         # Non scalar values should be treated as missing, dropping the invalid row.
         self.assertEqual(stats["initial_rows"], 2)
-        self.assertEqual(stats["invalid_emails"], 1)
+        self.assertEqual(stats["invalid_emails"], 0)
+        self.assertEqual(stats["missing_emails"], 1)
+        self.assertEqual(stats["rows_without_contact"], 1)
         self.assertEqual(stats["final_rows"], 1)
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(cleaned.iloc[0]["email"], "valid@example.com")
@@ -53,6 +59,54 @@ class CleaningNormalisationTests(unittest.TestCase):
         # Phone column should normalise non scalar entries to empty strings.
         self.assertIn("phone", cleaned.columns)
         self.assertEqual(cleaned.iloc[0]["phone"], "555-0000")
+
+    def test_clean_dataframe_autocorrects_common_email_typos(self):
+        df = pd.DataFrame(
+            {
+                "Email": [
+                    "user@gmail",
+                    "person@hotmail.con",
+                    "extra@yahoo.com,",
+                ],
+                "Phone": ["", "", ""],
+            }
+        )
+
+        cleaned, stats, _ = cleaning.clean_dataframe(df)
+
+        self.assertEqual(stats["initial_rows"], 3)
+        self.assertEqual(stats["invalid_emails"], 0)
+        self.assertGreaterEqual(stats["email_corrections"], 3)
+        self.assertEqual(len(cleaned), 3)
+        self.assertListEqual(
+            cleaned["email"].tolist(),
+            ["user@gmail.com", "person@hotmail.com", "extra@yahoo.com"],
+        )
+
+    def test_clean_dataframe_preserves_phone_only_rows(self):
+        df = pd.DataFrame(
+            {
+                "Email": ["", None],
+                "Phone": ["+12125550123", ""],
+            }
+        )
+
+        cleaned, stats, _ = cleaning.clean_dataframe(df)
+
+        # The phone-only row should be retained while the unreachable one is dropped.
+        self.assertEqual(stats["initial_rows"], 2)
+        self.assertEqual(stats["missing_emails"], 2)
+        self.assertEqual(stats["rows_without_contact"], 1)
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(cleaned.iloc[0]["phone"], "+12125550123")
+
+    def test_csv_loader_respects_quoted_names(self):
+        csv_text = "Created,Name,Email\n2024-01-01,\"Doe, John\",doe@example.com\n"
+        df = ingest.read_audience_csv(StringIO(csv_text))
+
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.loc[0, "Name"], "Doe, John")
+        self.assertEqual(df.loc[0, "Email"], "doe@example.com")
 
 
 if __name__ == "__main__":  # pragma: no cover
