@@ -1,8 +1,10 @@
 import unittest
 
+from io import StringIO
+
 import pandas as pd
 
-from utils import cleaning
+from utils import cleaning, ingest
 
 
 class CleaningNormalisationTests(unittest.TestCase):
@@ -97,6 +99,14 @@ class CleaningNormalisationTests(unittest.TestCase):
         self.assertEqual(stats["rows_without_contact"], 1)
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(cleaned.iloc[0]["phone"], "+12125550123")
+
+    def test_csv_loader_respects_quoted_names(self):
+        csv_text = "Created,Name,Email\n2024-01-01,\"Doe, John\",doe@example.com\n"
+        df = ingest.read_audience_csv(StringIO(csv_text))
+
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.loc[0, "Name"], "Doe, John")
+        self.assertEqual(df.loc[0, "Email"], "doe@example.com")
 
 
 if __name__ == "__main__":  # pragma: no cover

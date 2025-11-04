@@ -8,7 +8,7 @@ from typing import Dict, List
 import pandas as pd
 import streamlit as st
 
-from utils import cleaning, enrich, export_google, export_meta, export_tiktok, segmentation
+from utils import cleaning, enrich, export_google, export_meta, export_tiktok, segmentation, ingest
 
 
 st.set_page_config(page_title="Smart Custom Audience Builder", layout="wide")
@@ -18,9 +18,17 @@ st.write("Upload, clean, enrich, segment, and export your audience lists for Met
 
 
 def load_uploaded_file(file) -> pd.DataFrame:
-    if file.name.endswith(".xlsx"):
+    """Load an uploaded file into a DataFrame with robust CSV handling."""
+
+    filename = getattr(file, "name", "") or ""
+    suffix = filename.lower()
+
+    if suffix.endswith(".xlsx"):
+        if hasattr(file, "seek"):
+            file.seek(0)
         return pd.read_excel(file)
-    return pd.read_csv(file)
+
+    return ingest.read_audience_csv(file)
 
 
 def _normalise_header(value: object) -> str:
