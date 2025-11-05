@@ -108,6 +108,14 @@ class CleaningNormalisationTests(unittest.TestCase):
         self.assertEqual(df.loc[0, "Name"], "Doe, John")
         self.assertEqual(df.loc[0, "Email"], "doe@example.com")
 
+    def test_csv_loader_infers_missing_headers_and_email_column(self):
+        csv_text = "user@example.com,Jane,Doe,2024-01-01\nfriend@example.com,John,Smith,2024-01-02\n"
+        df = ingest.read_audience_csv(StringIO(csv_text))
+
+        self.assertListEqual(list(df.columns), ["email", "fn", "ln", "column_4"])
+        self.assertEqual(df.loc[0, "email"], "user@example.com")
+        self.assertEqual(df.loc[1, "fn"], "John")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
