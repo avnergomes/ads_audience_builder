@@ -29,6 +29,19 @@ def test_autofill_names_uses_email_only_when_missing_columns() -> None:
     assert enriched.loc[0, "ln"] == "Example"
 
 
+def test_autofill_names_uses_nameapi_when_available(monkeypatch) -> None:
+    df = pd.DataFrame({"email": ["something@example.com"]})
+
+    monkeypatch.setattr(
+        "utils.enrich._nameapi_lookup", lambda email: ("Api", "Result")
+    )
+
+    enriched = autofill_names(df)
+
+    assert enriched.loc[0, "fn"] == "Api"
+    assert enriched.loc[0, "ln"] == "Result"
+
+
 def test_infer_gender_handles_nested_objects() -> None:
     nested_first = pd.DataFrame({"value": [1]})
 

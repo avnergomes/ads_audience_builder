@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -15,6 +16,10 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 GENDERIZE_ENDPOINT = "https://api.genderize.io/"
 NAME_PARSER_ENDPOINT = "https://parserator.datamade.us/api/v1/parse/"
+NAMEAPI_EMAIL_ENDPOINT = "https://api.nameapi.org/rest/v5.3/emailnameparser/parse"
+NAMEAPI_API_KEY = os.environ.get(
+    "NAMEAPI_API_KEY", "85118005f2d3154ba9874fa65005f606-user1"
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +125,89 @@ COMMON_EMAIL_PREFIXES = {
 }
 
 
+def _walk_key_value_pairs(node: Any) -> Iterable[Tuple[str, Any]]:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key, value
+            yield from _walk_key_value_pairs(value)
+    elif isinstance(node, (list, tuple, set)):
+        for item in node:
+            yield from _walk_key_value_pairs(item)
+
+
+def _extract_nameapi_names(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(data, dict):
+        return None, None
+
+    first_candidates: list[str] = []
+    last_candidates: list[str] = []
+
+    for key, value in _walk_key_value_pairs(data):
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+
+        lowered = key.lower()
+        if "domain" in lowered or "email" in lowered:
+            continue
+
+        cleaned = _normalise_name(value)
+        if not cleaned:
+            continue
+
+        if "firstname" in lowered or "given" in lowered or lowered in {"first", "fn"}:
+            first_candidates.append(cleaned.title())
+        elif "lastname" in lowered or "surname" in lowered or lowered in {"last", "ln"}:
+            last_candidates.append(cleaned.title())
+
+    first = first_candidates[0] if first_candidates else None
+    last = last_candidates[0] if last_candidates else None
+
+    return first, last
+
+
+@lru_cache(maxsize=4096)
+def _nameapi_lookup(email: str) -> Tuple[Optional[str], Optional[str]]:
+    if not email or not isinstance(email, str):
+        return None, None
+
+    api_key = (NAMEAPI_API_KEY or "").strip()
+    if not api_key:
+        return None, None
+
+    payload = {
+        "inputPerson": {
+            "type": "NaturalInputPerson",
+            "emailAddress": {"address": email},
+        }
+    }
+
+    try:
+        response = requests.post(
+            NAMEAPI_EMAIL_ENDPOINT,
+            params={"apiKey": api_key},
+            json=payload,
+            timeout=5,
+        )
+    except requests.RequestException as exc:
+        LOGGER.debug("NameAPI email lookup failed for %s: %s", email, exc)
+        return None, None
+
+    if response.status_code != 200:
+        LOGGER.debug(
+            "NameAPI email API returned status %s for %s", response.status_code, email
+        )
+        return None, None
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        LOGGER.debug("NameAPI email API returned invalid JSON for %s: %s", email, exc)
+        return None, None
+
+    first, last = _extract_nameapi_names(data)
+    return first, last
+
+
 def _tidy_email_fragment(fragment: str) -> Optional[str]:
     cleaned = re.sub(r"\d+", "", fragment)
     cleaned = cleaned.strip()
@@ -131,6 +219,10 @@ def _tidy_email_fragment(fragment: str) -> Optional[str]:
 def derive_name_from_email(email: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(email, str) or "@" not in email:
         return None, None
+
+    api_first, api_last = _nameapi_lookup(email)
+    if api_first or api_last:
+        return api_first, api_last
 
     local_part = email.split("@", 1)[0]
     if "+" in local_part:
