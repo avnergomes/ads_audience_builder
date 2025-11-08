@@ -89,7 +89,7 @@ def _extract_name_from_payload(data: Dict[str, Any]) -> Tuple[Optional[str], Opt
     def _clean(value: Optional[str]) -> Optional[str]:
         if not isinstance(value, str):
             return None
-        text = value.strip()
+        text = re.sub(r"\d+", "", value).strip()
         return text.title() if text else None
 
     return _clean(first), _clean(last)
@@ -165,8 +165,44 @@ def _extract_nameapi_names(data: Dict[str, Any]) -> Tuple[Optional[str], Optiona
     return first, last
 
 
-@lru_cache(maxsize=4096)
-def _nameapi_lookup(email: str) -> Tuple[Optional[str], Optional[str]]:
+def _generate_nameapi_email_variants(email: str) -> list[str]:
+    if not isinstance(email, str) or "@" not in email:
+        return []
+
+    local_part, domain = email.split("@", 1)
+    seen: set[str] = set()
+    variants: list[str] = []
+
+    def register(local: str, *, require_alpha: bool = True) -> None:
+        if not isinstance(local, str):
+            return
+        if not local:
+            return
+        if require_alpha and not re.search(r"[A-Za-z]", local):
+            return
+        variant = f"{local}@{domain}"
+        if variant in seen:
+            return
+        seen.add(variant)
+        variants.append(variant)
+
+    register(local_part, require_alpha=False)
+
+    trailing_digits = re.search(r"(\d+)$", local_part or "")
+    if trailing_digits:
+        digits = trailing_digits.group(1)
+        for count in range(1, min(len(digits), 8) + 1):
+            trimmed = local_part[:-count]
+            register(trimmed)
+
+    digitless = re.sub(r"\d+", "", local_part)
+    register(digitless)
+
+    return variants
+
+
+@lru_cache(maxsize=8192)
+def _nameapi_lookup_single(email: str) -> Tuple[Optional[str], Optional[str]]:
     if not email or not isinstance(email, str):
         return None, None
 
@@ -206,6 +242,19 @@ def _nameapi_lookup(email: str) -> Tuple[Optional[str], Optional[str]]:
 
     first, last = _extract_nameapi_names(data)
     return first, last
+
+
+@lru_cache(maxsize=4096)
+def _nameapi_lookup(email: str) -> Tuple[Optional[str], Optional[str]]:
+    if not email or not isinstance(email, str):
+        return None, None
+
+    for variant in _generate_nameapi_email_variants(email):
+        first, last = _nameapi_lookup_single(variant)
+        if first or last:
+            return first, last
+
+    return None, None
 
 
 def _tidy_email_fragment(fragment: str) -> Optional[str]:
@@ -253,7 +302,8 @@ def derive_name_from_email(email: Optional[str]) -> Tuple[Optional[str], Optiona
 def _normalise_name(value: Optional[str]) -> Optional[str]:
     if not isinstance(value, str):
         return None
-    cleaned = " ".join(part for part in value.strip().split() if part)
+    text = re.sub(r"\d+", "", value)
+    cleaned = " ".join(part for part in text.strip().split() if part)
     return cleaned or None
 
 
