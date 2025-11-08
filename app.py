@@ -26,7 +26,7 @@ def load_uploaded_file(file) -> pd.DataFrame:
     if suffix.endswith(".xlsx"):
         if hasattr(file, "seek"):
             file.seek(0)
-        return pd.read_excel(file)
+        return pd.read_excel(file, dtype=str)
 
     return ingest.read_audience_csv(file)
 
