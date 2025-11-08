@@ -108,6 +108,41 @@ class CleaningNormalisationTests(unittest.TestCase):
         self.assertEqual(df.loc[0, "Name"], "Doe, John")
         self.assertEqual(df.loc[0, "Email"], "doe@example.com")
 
+    def test_csv_loader_detects_semicolon_delimiters(self):
+        csv_text = "Email;Phone\nuser@example.com;+1 415 555 0100\n"
+        df = ingest.read_audience_csv(StringIO(csv_text))
+
+        self.assertEqual(len(df), 1)
+        self.assertIn("Phone", df.columns)
+        self.assertEqual(df.loc[0, "Phone"], "+1 415 555 0100")
+
+    def test_normalize_phone_handles_numeric_values(self):
+        normalised = cleaning.normalize_phone(2.012342e9)
+        self.assertEqual(normalised, "+12012342000")
+
+    def test_clean_dataframe_coalesces_duplicate_contact_columns(self):
+        df = pd.DataFrame(
+            {
+                "Email": ["primary@example.com", ""],
+                "Email 1": ["fallback@example.com", "second@example.com"],
+                "Phone": ["+1 (212) 555-0100", ""],
+                "Phone 2": [pd.NA, 2.125555012e9],
+            }
+        )
+
+        cleaned, stats, _ = cleaning.clean_dataframe(df)
+
+        self.assertEqual(len(cleaned), 2)
+        self.assertListEqual(
+            cleaned["email"].tolist(),
+            ["primary@example.com", "second@example.com"],
+        )
+        self.assertListEqual(
+            cleaned["phone"].tolist(),
+            ["+12125550100", "+12125555012"],
+        )
+        self.assertEqual(stats["invalid_phones"], 0)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

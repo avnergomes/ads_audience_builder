@@ -1,6 +1,8 @@
 """Utilities for normalising and cleaning uploaded audience data."""
 from __future__ import annotations
 
+import math
+import numbers
 import re
 from typing import Dict, Iterable, List, Tuple
 
@@ -32,52 +34,117 @@ STANDARD_COLUMNS: Dict[str, str] = {
     "e-mail": "email",
     "email address": "email",
     "mail": "email",
+    "email1": "email",
+    "email 1": "email",
+    "email2": "email",
+    "email 2": "email",
+    "email-2": "email",
     "phone number": "phone",
+    "phone no": "phone",
+    "phone #": "phone",
+    "phone1": "phone",
+    "phone 1": "phone",
+    "phone2": "phone",
+    "phone 2": "phone",
     "mobile": "phone",
+    "mobile phone": "phone",
+    "secondary phone": "phone",
+    "secondary phone number": "phone",
+    "whatsapp": "phone",
+    "whatsapp number": "phone",
+    "first": "fn",
     "first name": "fn",
     "firstname": "fn",
     "given name": "fn",
+    "fname": "fn",
+    "last": "ln",
     "last name": "ln",
     "lastname": "ln",
     "surname": "ln",
     "family name": "ln",
+    "lname": "ln",
     "name": "full_name",
     "full name": "full_name",
     "fullname": "full_name",
     "zip code": "zip",
     "zipcode": "zip",
     "postal": "zip",
+    "postal code": "zip",
     "state/region": "st",
     "province": "st",
+    "state province": "st",
     "city/town": "ct",
+    "city": "ct",
     "country code": "country",
     "lead_id": "meta_lead_id",
     "lead id": "meta_lead_id",
     "source": "source",
 }
 
+CONTACT_COLUMNS = ("email", "phone", "fn", "ln", "full_name")
+
+
+def _stringify_header(value: object) -> str:
+    if value is None or not is_scalar(value):
+        return ""
+
+    if isinstance(value, str):
+        return value
+
+    return f"{value}"
+
+
+def _stringify_scalar_value(value: object) -> str:
+    if value is None or not is_scalar(value):
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, bool):
+        return str(value)
+
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, numbers.Integral):
+        return str(int(value))
+
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        if not math.isfinite(number):
+            return ""
+        text = format(number, "f").rstrip("0").rstrip(".")
+        return text or str(int(round(number)))
+
+    return str(value).strip()
+
+
+def _normalise_header_text(value: object) -> str:
+    text = _stringify_header(value).strip().lower()
+    if not text:
+        return ""
+
+    text = text.replace("\ufeff", "").replace("\u200b", "")
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[\s._-]*\d+$", "", text)
+    return text
+
 
 def normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of *df* with lower-cased, canonicalised headers."""
 
-    def _stringify(value: object) -> str:
-        if value is None:
-            return ""
+    renamed: Dict[object, str] = {}
+    seen: Dict[str, int] = {}
 
-        if is_scalar(value):
-            # Using f-strings ensures we always end up with a Python ``str`` even
-            # when the original value is a numpy scalar or another exotic type.
-            text = value if isinstance(value, str) else f"{value}"
-            return text
-
-        # Fallback for lists/Series/etc. – treat them as empty so they do not
-        # break normalisation.
-        return ""
-
-    renamed = {}
     for column in df.columns:
-        text = _stringify(column).strip().lower()
-        renamed[column] = STANDARD_COLUMNS.get(text, text)
+        text = _normalise_header_text(column)
+        canonical = STANDARD_COLUMNS.get(text, text)
+        count = seen.get(canonical, 0)
+        new_name = canonical if count == 0 else f"{canonical}__{count}"
+        seen[canonical] = count + 1
+        renamed[column] = new_name
+
     return df.rename(columns=renamed)
 
 
@@ -89,11 +156,20 @@ def trim_strings(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
         if is_scalar(value):
             if pd.isna(value):
                 return ""
-            return (value if isinstance(value, str) else f"{value}").strip()
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, bool):
+                return str(value)
+            if isinstance(value, numbers.Integral):
+                return str(int(value))
+            if isinstance(value, numbers.Real):
+                number = float(value)
+                if not math.isfinite(number):
+                    return ""
+                text = format(number, "f").rstrip("0").rstrip(".")
+                return text or str(int(round(number)))
+            return str(value).strip()
 
-        # Non scalar objects (lists, Series, dicts, etc.) are not meaningful
-        # audience attributes; normalise them to empty strings so downstream
-        # steps can safely treat them as missing.
         return ""
 
     for column in columns:
@@ -103,13 +179,7 @@ def trim_strings(df: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
 
 
 def validate_email(email: object) -> bool:
-    if email is None or not is_scalar(email):
-        return False
-
-    if pd.isna(email):
-        return False
-
-    text = str(email).strip()
+    text = _stringify_scalar_value(email)
     if not text:
         return False
 
@@ -198,29 +268,17 @@ def _sanitise_email(value: object) -> Tuple[str, Dict[str, bool]]:
     if text.count("@") != 1:
         return text, meta
 
-    if not text:
+    local, domain = text.split("@", 1)
+    if not local or not domain:
         meta["missing"] = True
 
     return text, meta
 
 
 def validate_phone(phone: object, default_country: str = "US") -> bool:
-    """Validate and check if a phone number is parseable.
-    
-    Args:
-        phone: The phone number to validate
-        default_country: Default country code for parsing (default: US)
-    
-    Returns:
-        True if the phone number is valid, False otherwise
-    """
-    if phone is None or not is_scalar(phone):
-        return False
+    """Validate and check if a phone number is parseable."""
 
-    if pd.isna(phone):
-        return False
-
-    text = str(phone).strip()
+    text = _stringify_scalar_value(phone)
     if not text:
         return False
 
@@ -232,47 +290,91 @@ def validate_phone(phone: object, default_country: str = "US") -> bool:
 
 
 def normalize_phone(phone: object, default_country: str = "US") -> str:
-    """Normalize a phone number to E164 format.
-    
-    Args:
-        phone: The phone number to normalize
-        default_country: Default country code for parsing (default: US)
-    
-    Returns:
-        Normalized phone number in E164 format or empty string if invalid
-    """
-    if phone is None or not is_scalar(phone):
-        return ""
+    """Normalize a phone number to E164 format."""
 
-    if pd.isna(phone):
-        return ""
-
-    text = str(phone).strip()
+    text = _stringify_scalar_value(phone)
     if not text:
         return ""
 
+    cleaned = text.replace("\ufeff", "").replace("\u200b", "")
+    cleaned = cleaned.lower()
+    cleaned = re.split(r"(?:ext|extension|x)\s*", cleaned)[0]
+    cleaned = cleaned.strip()
+
+    original = cleaned
+
+    if not cleaned:
+        return ""
+
+    has_plus = cleaned.startswith("+")
+    digits = re.sub(r"\D", "", cleaned)
+    if not digits:
+        return ""
+
+    candidate = f"+{digits}" if has_plus else digits
+
     try:
-        parsed = phonenumbers.parse(text, default_country)
+        parsed = phonenumbers.parse(candidate, default_country)
         if phonenumbers.is_valid_number(parsed):
             return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
     except phonenumbers.NumberParseException:
         pass
 
-    return text
+    return original
 
 
 def clean_phones(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    """Normalize phone numbers to E164 format.
-    
-    Returns the cleaned DataFrame along with the number of invalid phones found.
-    Note: Unlike emails, invalid phones are not removed, just flagged in stats.
-    """
+    """Normalize phone numbers to E164 format."""
+
     invalid_phones = 0
     if "phone" in df.columns:
         df["phone"] = df["phone"].apply(normalize_phone)
         invalid_mask = df["phone"].apply(lambda x: x == "" or not validate_phone(x))
         invalid_phones = int(invalid_mask.sum())
     return df, invalid_phones
+
+
+def _coalesce_values(values: Iterable[object]) -> str:
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        text = _stringify_scalar_value(value)
+        if text:
+            return text
+    return ""
+
+
+def coalesce_contact_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Combine duplicate contact columns keeping the first populated value."""
+
+    if df.empty:
+        return df
+
+    df = df.copy()
+    column_labels = list(df.columns)
+
+    for base in CONTACT_COLUMNS:
+        indices = [idx for idx, label in enumerate(column_labels) if str(label).startswith(base)]
+        if not indices:
+            continue
+
+        subset = df.iloc[:, indices]
+        if isinstance(subset, pd.Series):
+            subset = subset.to_frame()
+
+        combined = subset.apply(lambda row: _coalesce_values(row.tolist()), axis=1)
+
+        primary_label = column_labels[indices[0]]
+        df.iloc[:, indices[0]] = combined
+        if primary_label != base:
+            df.rename(columns={primary_label: base}, inplace=True)
+
+        for position in reversed(indices[1:]):
+            df.drop(columns=column_labels[position], inplace=True)
+
+        column_labels = list(df.columns)
+
+    return df
 
 
 def clean_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int]]:
@@ -374,6 +476,10 @@ def clean_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, int], Lis
 
     df = normalise_columns(df)
     df = trim_strings(df, df.select_dtypes(include="object").columns)
+
+    # Merge duplicate contact fields so that enrichment/validation steps have a
+    # single canonical column to work with.
+    df = coalesce_contact_columns(df)
 
     df, email_stats = clean_emails(df)
     stats["invalid_emails"] = email_stats["invalid"]
