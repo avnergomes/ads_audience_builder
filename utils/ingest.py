@@ -13,8 +13,8 @@ CSV_OPTIONS = {
     "sep": ",",
     "quotechar": '"',
     "quoting": csv.QUOTE_MINIMAL,
+    "doublequote": True,
     "escapechar": "\\",
-    "engine": "python",
     "dtype": str,
     "keep_default_na": False,
     "na_values": [],
@@ -94,6 +94,30 @@ def _sniff_dialect(sample: str) -> Dict[str, Any]:
     return options
 
 
+def _read_with_engine(
+    source: IO[str] | IO[bytes] | str,
+    encoding: str,
+    options: Dict[str, Any],
+    engine: str,
+) -> pd.DataFrame:
+    """Attempt to read CSV with a specific pandas engine."""
+
+    read_options = {**options, "engine": engine}
+    return pd.read_csv(source, encoding=encoding, **read_options)
+
+
+def _read_without_escapechar(
+    source: IO[str] | IO[bytes] | str,
+    encoding: str,
+    options: Dict[str, Any],
+    engine: str,
+) -> pd.DataFrame:
+    """Retry CSV parsing without the ``escapechar`` hint."""
+
+    fallback = {key: value for key, value in options.items() if key != "escapechar"}
+    return _read_with_engine(source, encoding, fallback, engine)
+
+
 def read_audience_csv(source: IO[str] | IO[bytes] | str) -> pd.DataFrame:
     """Read a CSV file while respecting quoted fields such as "Surname, Name"."""
 
@@ -102,17 +126,28 @@ def read_audience_csv(source: IO[str] | IO[bytes] | str) -> pd.DataFrame:
     read_options = {**CSV_OPTIONS, **sniffed_options}
 
     for encoding in ENCODINGS:
+        # First try the high-performance C engine with our hints.
         _reset_stream(source)
         try:
-            return pd.read_csv(source, encoding=encoding, **read_options)
+            return _read_with_engine(source, encoding, read_options, "c")
+        except UnicodeDecodeError:
+            continue
+        except (pd.errors.ParserError, ValueError):
+            # ParserError covers malformed CSVs, ValueError happens when options
+            # are incompatible with the C engine (e.g. unsupported sep/quote).
+            pass
+
+        # Fall back to the more permissive Python engine.
+        _reset_stream(source)
+        try:
+            return _read_with_engine(source, encoding, read_options, "python")
         except UnicodeDecodeError:
             continue
         except pd.errors.ParserError:
             # Retry without escape char if parser chokes on malformed CSVs.
-            fallback = {key: value for key, value in read_options.items() if key != "escapechar"}
             _reset_stream(source)
             try:
-                return pd.read_csv(source, encoding=encoding, **fallback)
+                return _read_without_escapechar(source, encoding, read_options, "python")
             except (UnicodeDecodeError, pd.errors.ParserError):
                 continue
 
