@@ -16,7 +16,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 GENDERIZE_ENDPOINT = "https://api.genderize.io/"
 NAME_PARSER_ENDPOINT = "https://parserator.datamade.us/api/v1/parse/"
-NAMEAPI_EMAIL_ENDPOINT = "https://api.nameapi.org/rest/v5.3/emailnameparser/parse"
+NAMEAPI_EMAIL_ENDPOINT = "https://api.nameapi.org/rest/v5.3/email/emailnameparser"
 NAMEAPI_API_KEY = os.environ.get(
     "NAMEAPI_API_KEY", "85118005f2d3154ba9874fa65005f606-user1"
 )
@@ -201,6 +201,17 @@ def _generate_nameapi_email_variants(email: str) -> list[str]:
     return variants
 
 
+_REQUESTS_SESSION: Optional[requests.Session] = None
+
+
+def _get_requests_session() -> requests.Session:
+    global _REQUESTS_SESSION
+    if _REQUESTS_SESSION is None:
+        _REQUESTS_SESSION = requests.Session()
+        _REQUESTS_SESSION.headers.update({"Accept": "application/json"})
+    return _REQUESTS_SESSION
+
+
 @lru_cache(maxsize=8192)
 def _nameapi_lookup_single(email: str) -> Tuple[Optional[str], Optional[str]]:
     if not email or not isinstance(email, str):
@@ -210,18 +221,10 @@ def _nameapi_lookup_single(email: str) -> Tuple[Optional[str], Optional[str]]:
     if not api_key:
         return None, None
 
-    payload = {
-        "inputPerson": {
-            "type": "NaturalInputPerson",
-            "emailAddress": {"address": email},
-        }
-    }
-
     try:
-        response = requests.post(
+        response = _get_requests_session().get(
             NAMEAPI_EMAIL_ENDPOINT,
-            params={"apiKey": api_key},
-            json=payload,
+            params={"apiKey": api_key, "emailAddress": email},
             timeout=5,
         )
     except requests.RequestException as exc:
